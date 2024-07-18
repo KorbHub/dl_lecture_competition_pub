@@ -32,7 +32,10 @@ def set_seed(seed):
 
 # Text preprocessing function
 def process_text(text):
+    # Convert text to lowercase
     text = text.lower()
+    
+    # Replace number words with digits
     num_word_to_digit = {
         'zero': '0', 'one': '1', 'two': '2', 'three': '3', 'four': '4',
         'five': '5', 'six': '6', 'seven': '7', 'eight': '8', 'nine': '9',
@@ -40,23 +43,45 @@ def process_text(text):
     }
     for word, digit in num_word_to_digit.items():
         text = text.replace(word, digit)
-    text = re.sub(r'[^\w\s]', '', text)
-    text = re.sub(r'\b(a|an|the)\b', '', text)
-    contractions = {
-        "dont": "don't", "isnt": "isn't", "arent": "aren't", "wont": "won't",
-        "cant": "can't", "wouldnt": "wouldn't", "couldnt": "couldn't"
-    }
-    for contraction, correct in contractions.items():
-        text = text.replace(contraction, correct)
-    tokens = word_tokenize(text)
-    stop_words = set(stopwords.words('english'))
-    tokens = [word for word in tokens if word not in stop_words]
-    stemmer = PorterStemmer()
-    tokens = [stemmer.stem(word) for word in tokens]
-    lemmatizer = WordNetLemmatizer()
-    tokens = [lemmatizer.lemmatize(word) for word in tokens]
-    return ' '.join(tokens)
 
+    # Expand contractions
+    contractions = {
+        "don't": "do not", "isn't": "is not", "aren't": "are not", "won't": "will not",
+        "can't": "cannot", "wouldn't": "would not", "couldn't": "could not",
+        "i'm": "i am", "you're": "you are", "he's": "he is", "she's": "she is",
+        "it's": "it is", "we're": "we are", "they're": "they are", "i've": "i have",
+        "you've": "you have", "we've": "we have", "they've": "they have",
+        "i'd": "i would", "you'd": "you would", "he'd": "he would", "she'd": "she would",
+        "we'd": "we would", "they'd": "they would", "i'll": "i will", "you'll": "you will",
+        "he'll": "he will", "she'll": "she will", "we'll": "we will", "they'll": "they will",
+        "doesn't": "does not", "haven't": "have not", "hasn't": "has not", "hadn't": "had not",
+        "won't": "will not", "wouldn't": "would not", "weren't": "were not", "wasn't": "was not",
+        "isn't": "is not", "aren't": "are not", "ain't": "is not"
+    }
+    for contraction, expanded in contractions.items():
+        text = re.sub(r'\b' + contraction + r'\b', expanded, text)
+
+    # Remove articles
+    text = re.sub(r'\b(a|an|the)\b', '', text)
+
+    # Remove punctuation
+    text = re.sub(r'[^\w\s]', '', text)
+
+    # Tokenize text
+    words = word_tokenize(text)
+
+    # Remove stop words
+    stop_words = set(stopwords.words('english'))
+    words = [word for word in words if word not in stop_words]
+
+    # Lemmatize words
+    lemmatizer = WordNetLemmatizer()
+    words = [lemmatizer.lemmatize(word) for word in words]
+
+    # Join words back to text
+    text = ' '.join(words)
+
+    return text
 
 # 1. データローダーの作成
 class VQADataset(torch.utils.data.Dataset):
