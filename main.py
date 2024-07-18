@@ -1,7 +1,8 @@
 import re
 import random
 import time
-from statistics import mode
+from statistics import mode, StatisticsError
+from tqdm import tqdm
 
 from PIL import Image
 import numpy as np
@@ -10,8 +11,16 @@ import torch
 import torch.nn as nn
 import torchvision
 from torchvision import transforms
+from nltk.corpus import stopwords
+from nltk.stem import PorterStemmer, WordNetLemmatizer
+from nltk.tokenize import word_tokenize
 
+import nltk
+nltk.download('punkt')
+nltk.download('stopwords')
+nltk.download('wordnet')
 
+# Seed setting function
 def set_seed(seed):
     random.seed(seed)
     np.random.seed(seed)
@@ -21,12 +30,9 @@ def set_seed(seed):
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
-
+# Text preprocessing function
 def process_text(text):
-    # lowercase
     text = text.lower()
-
-    # 数詞を数字に変換
     num_word_to_digit = {
         'zero': '0', 'one': '1', 'two': '2', 'three': '3', 'four': '4',
         'five': '5', 'six': '6', 'seven': '7', 'eight': '8', 'nine': '9',
@@ -34,31 +40,22 @@ def process_text(text):
     }
     for word, digit in num_word_to_digit.items():
         text = text.replace(word, digit)
-
-    # 小数点のピリオドを削除
-    text = re.sub(r'(?<!\d)\.(?!\d)', '', text)
-
-    # 冠詞の削除
+    text = re.sub(r'[^\w\s]', '', text)
     text = re.sub(r'\b(a|an|the)\b', '', text)
-
-    # 短縮形のカンマの追加
     contractions = {
         "dont": "don't", "isnt": "isn't", "arent": "aren't", "wont": "won't",
         "cant": "can't", "wouldnt": "wouldn't", "couldnt": "couldn't"
     }
     for contraction, correct in contractions.items():
         text = text.replace(contraction, correct)
-
-    # 句読点をスペースに変換
-    text = re.sub(r"[^\w\s':]", ' ', text)
-
-    # 句読点をスペースに変換
-    text = re.sub(r'\s+,', ',', text)
-
-    # 連続するスペースを1つに変換
-    text = re.sub(r'\s+', ' ', text).strip()
-
-    return text
+    tokens = word_tokenize(text)
+    stop_words = set(stopwords.words('english'))
+    tokens = [word for word in tokens if word not in stop_words]
+    stemmer = PorterStemmer()
+    tokens = [stemmer.stem(word) for word in tokens]
+    lemmatizer = WordNetLemmatizer()
+    tokens = [lemmatizer.lemmatize(word) for word in tokens]
+    return ' '.join(tokens)
 
 
 # 1. データローダーの作成
@@ -296,6 +293,7 @@ class VQAModel(nn.Module):
         self.fc = nn.Sequential(
             nn.Linear(1024, 512),
             nn.ReLU(inplace=True),
+            nn.Dropout(0.5),  # Dropout layer to prevent overfitting
             nn.Linear(512, n_answer)
         )
 
@@ -318,7 +316,7 @@ def train(model, dataloader, optimizer, criterion, device):
     simple_acc = 0
 
     start = time.time()
-    for image, question, answers, mode_answer in dataloader:
+    for image, question, answers, mode_answer in tqdm(dataloader, desc="Training"):
         image, question, answer, mode_answer = \
             image.to(device), question.to(device), answers.to(device), mode_answer.to(device)
 
@@ -333,7 +331,8 @@ def train(model, dataloader, optimizer, criterion, device):
         total_acc += VQA_criterion(pred.argmax(1), answers)  # VQA accuracy
         simple_acc += (pred.argmax(1) == mode_answer).float().mean().item()  # simple accuracy
 
-    return total_loss / len(dataloader), total_acc / len(dataloader), simple_acc / len(dataloader), time.time() - start
+    end = time.time()
+    return total_loss / len(dataloader), total_acc / len(dataloader), simple_acc / len(dataloader), end - start
 
 
 def eval(model, dataloader, optimizer, criterion, device):
@@ -344,7 +343,7 @@ def eval(model, dataloader, optimizer, criterion, device):
     simple_acc = 0
 
     start = time.time()
-    for image, question, answers, mode_answer in dataloader:
+    for image, question, answers, mode_answer in tqdm(dataloader, desc="Evaluating"):
         image, question, answer, mode_answer = \
             image.to(device), question.to(device), answers.to(device), mode_answer.to(device)
 
@@ -355,7 +354,8 @@ def eval(model, dataloader, optimizer, criterion, device):
         total_acc += VQA_criterion(pred.argmax(1), answers)  # VQA accuracy
         simple_acc += (pred.argmax(1) == mode_answer).mean().item()  # simple accuracy
 
-    return total_loss / len(dataloader), total_acc / len(dataloader), simple_acc / len(dataloader), time.time() - start
+    end = time.time()
+    return total_loss / len(dataloader), total_acc / len(dataloader), simple_acc / len(dataloader), end - start
 
 
 def main():
@@ -366,7 +366,14 @@ def main():
     # dataloader / model
     transform = transforms.Compose([
         transforms.Resize((224, 224)),
-        transforms.ToTensor()
+        transforms.RandomHorizontalFlip(p=0.5),
+        transforms.RandomVerticalFlip(p=0.5),
+        transforms.RandomRotation(20),
+        transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4, hue=0.2),
+        transforms.RandomAffine(translate=(0.2, 0.2), degrees=20),
+        transforms.RandomResizedCrop(224, scale=(0.8, 1.0)),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ])
     train_dataset = VQADataset(df_path="./data/train.json", image_dir="./data/train", transform=transform)
     test_dataset = VQADataset(df_path="./data/valid.json", image_dir="./data/valid", transform=transform, answer=False)
@@ -394,7 +401,7 @@ def main():
     # 提出用ファイルの作成
     model.eval()
     submission = []
-    for image, question in test_loader:
+    for image, question in tqdm(test_loader, desc="Generating Submission"):
         image, question = image.to(device), question.to(device)
         pred = model(image, question)
         pred = pred.argmax(1).cpu().item()
